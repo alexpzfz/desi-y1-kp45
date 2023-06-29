@@ -514,7 +514,7 @@ class CutSky():
         tracer : str
             Supported tracers: 'LRG', 'ELG' and 'QSO'.
         whichmocks : str
-            Supported mocks: 'firstgen', 'sv3'
+            Supported mocks: 'firstgen', 'sv3', 'firstgen_y1'
         ncosmo_true : str
             The cosmology from the simulation.
         ph : int
@@ -574,15 +574,16 @@ class CutSky():
                 style = 'sandy'
             elif self.tracer=='ELG':
                 style = 'antoine'
+        elif self.whichmocks=='firstgen_y1':
+            style = 'ashley'
         self.style = style
         
         if not self.rectype:
-            if not self.path:
-                scratch = os.environ.get('SCRATCH')
-                path = f'{scratch}/KP4/fiducial_cosmo/'
+            if self.style == 'firstgen':
+                if not self.path:
+                    scratch = os.environ.get('SCRATCH')
+                    path = f'{scratch}/KP4/fiducial_cosmo/'
  
-            
-            if self.style=='firstgen':
                 wherefrom = f'AbacusSummit_base_c{self.ncosmo_true}_FirstGen_ph{self.ph}/'
                 base_dir = path + f'CutSky/{self.tracer}/' + wherefrom
                 if self.cap:
@@ -599,6 +600,10 @@ class CutSky():
                     file = base_dir + f'cutsky_{self.tracer}_z{self.zbox:.3f}_AbacusSummit_base_c000_ph{self.ph}.fits'
                     self.filename = file
                     self.pre_mask = False
+            elif self.style == 'ashley':
+                base_dir = f'/global/cfs/cdirs/desi/survey/catalogs/main/mocks/FirstGenMocks/AbacusSummit/Y1/mock{int(self.ph)}/LSScats/'
+                file = [base_dir + f'{self.tracer}_{d}_clustering.dat.fits' for d in ['S', 'N']]
+                self.filename = file
             else:
                 raise NotImplementedError
         
@@ -686,6 +691,9 @@ class CutSky():
                 elif postype == 'sky_with_z':
                     positions = np.array([data['Z'], data['RA'], data['DEC']])
                     self.positions = positions.T
+            
+            elif self.style == 'ashley':
+                return NotImplementedError
         else:
             columns = ['RA', 'DEC', 'Z', 'NZ']
             data = read(self.filename, ext=1, columns=columns, mocktype='cutsky')

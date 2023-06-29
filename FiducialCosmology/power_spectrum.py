@@ -41,11 +41,18 @@ if mocktype=='cubicbox':
                   ncosmo_true=ncosmo_true, ncosmo_grid=ncosmo_grid)
     ofile = cb.get_ofilename('pk')
     data = cb.get_dict()
-    shifted = cb.get_randoms(shifted=True, concat=True) if rectype else None
 
-    poles = CatalogFFTPower(data_positions1=data['positions'], shifted_positions1=shifted['positions'],
-                            boxsize=cb.boxsize, boxcenter=cb.boxcenter, los='z', position_type='pos', 
-                            **pypower_kwargs).poles
+    if rectype:
+        shifted = cb.get_randoms(shifted=True, concat=True) 
+        poles = CatalogFFTPower(data_positions1=data['positions'], shifted_positions1=shifted['positions'],
+                                boxsize=cb.boxsize, boxcenter=cb.boxcenter, los='z', position_type='pos', 
+                                **pypower_kwargs).poles
+
+    else:
+        poles = CatalogFFTPower(data_positions1=data['positions'], boxsize=cb.boxsize,
+                                boxcenter=cb.boxcenter, los='z', position_type='pos', 
+                                **pypower_kwargs).poles
+
     
 elif mocktype=='cutsky':
     cs = CutSky(tracer, ph=ph, whichmocks=whichmocks, rectype=rectype,

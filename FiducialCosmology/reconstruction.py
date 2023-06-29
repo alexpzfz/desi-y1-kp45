@@ -103,7 +103,7 @@ elif mocktype == 'cutsky':
     z = dtoredshift(distance)
     d = Table([ra, dec, z, data['nz']], names=['RA', 'DEC', 'Z', 'NZ'])
     print('Saving displaced field: \n', ofile, '\n')
-    d.write(ofile, format='fits')
+    d.write(ofile, format='fits', overwrite=True)
     
     # randoms
     for seed, randoms in zip(seeds, randoms_x20):
@@ -115,7 +115,7 @@ elif mocktype == 'cutsky':
             z = dtoredshift(distance)
             randoms_table = Table([ra, dec, z, randoms['nz']], names=['RA', 'DEC', 'Z', 'NZ'])
             print('Saving shifted randoms: \n', randoms_ofile)
-            randoms_table.write(randoms_ofile, format='fits')
+            randoms_table.write(randoms_ofile, format='fits', overwrite=True)
     print('\n')
 
     
