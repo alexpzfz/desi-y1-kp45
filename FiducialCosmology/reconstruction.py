@@ -27,9 +27,7 @@ pyrecon_kwargs = {'fft_engine': 'fftw',
 if mocktype == 'cubicbox':
     pyrecon_kwargs['nmesh'] = 512
 elif mocktype == 'cutsky':
-    nmesh = 512
-    pyrecon_kwargs['cellsize'] = 2000. / nmesh
-
+    pyrecon_kwargs['cellsize'] = 7.8
 
 print('\nReconstrution computation:')
 print(f'{mocktype.upper()} {tracer} {whichmocks.upper()} ph={ph}') 
@@ -87,36 +85,70 @@ elif mocktype == 'cutsky':
     
     # RECONSTRUCTION
     print('Begining reconstruction')
-    seeds = range(100, 2100, 100)
-    randoms_x20 = cs.get_randoms(seeds=seeds)
-    recon = ReconstructionAlgorithm(f=cs.f_grid, bias=cs.bias, los='local',
-                                    positions=np.concatenate([randoms['positions'] for randoms in randoms_x20]),
-                                    **pyrecon_kwargs)
+    if whichmocks == 'firstgen':
+        seeds = range(100, 2100, 100)
+        randoms_x20 = cs.get_randoms(seeds=seeds)
+        
+        recon = ReconstructionAlgorithm(f=cs.f_grid, bias=cs.bias, los='local',
+                                        positions=np.concatenate([randoms['positions'] for randoms in randoms_x20]),
+                                        **pyrecon_kwargs)
+
+        recon.assign_randoms(np.concatenate([randoms['positions'] for randoms in randoms_x20]))
+        recon.assign_data(data['positions'])
+        recon.set_density_contrast(smoothing_radius=cs.smoothing)
+        recon.run()
+
+        data['positions_rec'] = data['positions'] - recon.read_shifts(data['positions'], field='disp+rsd')
+        distance, ra, dec = utils.cartesian_to_sky(data['positions_rec'])
+        z = dtoredshift(distance)
+        d = Table([ra, dec, z, data['nz']], names=['RA', 'DEC', 'Z', 'NZ'])
+        print('Saving displaced field: \n', ofile, '\n')
+        d.write(ofile, format='fits', overwrite=True)
+
+        # randoms
+        for seed, randoms in zip(seeds, randoms_x20):
+            for convention, field in zip(['recsym','reciso'], ['disp+rsd','disp']):
+                randoms['positions_rec'] = randoms['positions'] - recon.read_shifts(randoms['positions'], field=field)
+                randoms_ofile = cs.get_randoms_ofilename(seed, convention)
+
+                distance, ra, dec = utils.cartesian_to_sky(randoms['positions_rec'])
+                z = dtoredshift(distance)
+                randoms_table = Table([ra, dec, z, randoms['nz']], names=['RA', 'DEC', 'Z', 'NZ'])
+                print('Saving shifted randoms: \n', randoms_ofile)
+                randoms_table.write(randoms_ofile, format='fits', overwrite=True)
+        
     
-    recon.assign_randoms(np.concatenate([randoms['positions'] for randoms in randoms_x20]))
-    recon.assign_data(data['positions'])
-    recon.set_density_contrast(smoothing_radius=cs.smoothing)
-    recon.run()
-    
-    data['positions_rec'] = data['positions'] - recon.read_shifts(data['positions'], field='disp+rsd')
-    distance, ra, dec = utils.cartesian_to_sky(data['positions_rec'])
-    z = dtoredshift(distance)
-    d = Table([ra, dec, z, data['nz']], names=['RA', 'DEC', 'Z', 'NZ'])
-    print('Saving displaced field: \n', ofile, '\n')
-    d.write(ofile, format='fits', overwrite=True)
-    
-    # randoms
-    for seed, randoms in zip(seeds, randoms_x20):
+    # For Y1 mocks a single randoms catalog is provided. Also, these mocks wave two weight columns.
+    # Some code is rewritten for clarity.
+    # Maybe write a cleaner version in the future that takes into account bouth FirstGen and Y1 without using an if statement?
+    elif whichmocks == 'firstgen_y1':
+        randoms = cs.get_randoms()
+        
+        recon = ReconstructionAlgorithm(f=cs.f_grid, bias=cs.bias, los='local',
+                                        positions=randoms['positions'], **pyrecon_kwargs)
+        
+        recon.assign_randoms(randoms['positions'], randoms['weights']*randoms['w_fkp'])
+        recon.assign_data(data['positions'], data['weights']*data['w_fkp'])
+        recon.set_density_contrast(smoothing_radius=cs.smoothing)
+        recon.run()
+        
+        data['positions_rec'] = data['positions'] - recon.read_shifts(data['positions'], field='disp+rsd')
+        distance, ra, dec = utils.cartesian_to_sky(data['positions_rec'])
+        z = dtoredshift(distance)
+        d = Table([ra, dec, z, data['nz'], data['weights'], data['w_fkp']],
+                  names=['RA', 'DEC', 'Z', 'NZ', 'WEIGHT', 'WEIGHT_FKP'])
+        print('Saving displaced field: \n', ofile, '\n')
+        d.write(ofile, format='fits', overwrite=True)
+        
         for convention, field in zip(['recsym','reciso'], ['disp+rsd','disp']):
             randoms['positions_rec'] = randoms['positions'] - recon.read_shifts(randoms['positions'], field=field)
-            randoms_ofile = cs.get_randoms_ofilename(seed, convention)
-            
+            randoms_ofile = cs.get_randoms_ofilename(convention=convention)
+
             distance, ra, dec = utils.cartesian_to_sky(randoms['positions_rec'])
             z = dtoredshift(distance)
-            randoms_table = Table([ra, dec, z, randoms['nz']], names=['RA', 'DEC', 'Z', 'NZ'])
+            randoms_table = Table([ra, dec, z, randoms['nz'], randoms['weights'], randoms['w_fkp']],
+                                  names=['RA', 'DEC', 'Z', 'NZ', 'WEIGHT', 'WEIGHT_FKP'])
             print('Saving shifted randoms: \n', randoms_ofile)
             randoms_table.write(randoms_ofile, format='fits', overwrite=True)
+    
     print('\n')
-
-    
-    

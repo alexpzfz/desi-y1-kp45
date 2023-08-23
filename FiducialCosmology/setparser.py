@@ -7,7 +7,7 @@ def set_parser(kind='clustering'):
                         help='The kind of mock.')
     parser.add_argument('tracer', choices=['lrg', 'elg', 'qso'],
                         help='Tracer.')
-    parser.add_argument('whichmocks', choices=['firstgen', 'sv3'],
+    parser.add_argument('whichmocks', choices=['firstgen', 'sv3', 'firstgen_y1'],
                         help='FirstGen mocks or mocks with new HOD based on sv3.')
     parser.add_argument('ph', choices=range(25), type=int, help='Phase')
     parser.add_argument('zbin', choices=range(3), type=int, nargs='?',

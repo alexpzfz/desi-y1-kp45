@@ -29,6 +29,7 @@ if mocktype == 'cubicbox':
     pypower_kwargs['nmesh'] = 512
 elif mocktype == 'cutsky':
     pypower_kwargs['nmesh'] = 1024
+    pypower_kwargs['boxpad'] = 1.2
 
 
 print0('\nPower spectrum computation:')
@@ -63,13 +64,13 @@ elif mocktype=='cutsky':
    
     if rectype: 
         shifted = cs.get_randoms(shifted=True, concat=True)
-        poles = CatalogFFTPower(data_positions1=data['positions'], data_weights1=w_fkp(data['nz']),
-                                randoms_positions1=randoms['positions'], randoms_weights1=w_fkp(randoms['nz']), 
-                                shifted_positions1=shifted['positions'], shifted_weights1=w_fkp(shifted['nz']),
+        poles = CatalogFFTPower(data_positions1=data['positions'], data_weights1=data['weights']*data['w_fkp'],
+                                randoms_positions1=randoms['positions'], randoms_weights1=randoms['weights']*randoms['w_fkp'], 
+                                shifted_positions1=shifted['positions'], shifted_weights1=shifted['weights']*shifted['w_fkp'],
                                 position_type='pos', **pypower_kwargs).poles
     else:
-        poles = CatalogFFTPower(data_positions1=data['positions'], data_weights1=w_fkp(data['nz']),
-                                randoms_positions1=randoms['positions'], randoms_weights1=w_fkp(randoms['nz']), 
+        poles = CatalogFFTPower(data_positions1=data['positions'], data_weights1=data['weights']*data['w_fkp'],
+                                randoms_positions1=randoms['positions'], randoms_weights1=randoms['weights']*randoms['w_fkp'], 
                                 position_type='pos', **pypower_kwargs).poles
     
 poles.save(ofile)

@@ -44,21 +44,25 @@ settings_cutsky = {
                     'smoothing': 10,
                     'zbins': [{'zmin': 0.4, 'zmax':0.6},
                               {'zmin': 0.6, 'zmax': 0.8},
-                              {'zmin': 0.8, 'zmax': 1.1}]},
+                              {'zmin': 0.8, 'zmax': 1.1}],
+                    'P0': 1e4},
             'ELG': {'zbox': 1.1,
                     'snap': 16,
                     'bias': 1.2,
                     'smoothing': 10,
                     'zbins': [{'zmin': 0.6, 'zmax': 0.8},
                               {'zmin': 0.8, 'zmax': 1.1},
-                              {'zmin': 1.1, 'zmax': 1.6}]},
+                              {'zmin': 1.1, 'zmax': 1.6}],
+                    'P0': 4e4},
             'QSO': {'zbox': 1.4,
                     'snap': 12,
                     'bias': 2.07,
                     'smoothing': 15,
                     'zbins': [{'zmin': 0.8, 'zmax': 1.6},
                               {'zmin': 1.6, 'zmax': 2.1},
-                              {'zmin': 2.1, 'zmax': 3.5}]}}
+                              {'zmin': 2.1, 'zmax': 3.5}],
+                    'P0': 1e4},
+                   }
 #--------------------------------------------------------------------
 
 # Arnaud's read function for fits files
@@ -115,6 +119,7 @@ class CubicBox():
                  rec_settings=None,
                  path=None,
                  load=True,
+                 ngal=None,
                 ):
         """
         Parameters
@@ -141,6 +146,9 @@ class CubicBox():
             Path to overwrite the default input path.
         load : boolean, default=True
             Specify if the data should be loaded.
+        ngal: float, default=None
+            Specify density for downsampling. If ngal=None no downsampling is applied for FirstGen mocks, but a default
+            ngal=1e-3 is applied for SV3 mocks.
         """
         
         self.boxsize = boxsize
@@ -157,6 +165,7 @@ class CubicBox():
         self.rec_settings = rec_settings if rec_settings else {'rec_algorithm': 'multigrid',
                                                                'nmesh': 512}
         self.path = path
+        self.ngal = 1e-3 if ((whichmocks=='sv3') & (not self.rectype)) else ngal
         
         # set cosmologies
         cosmo_true = fiducial.AbacusSummit(name=self.ncosmo_true, engine='class')
@@ -267,8 +276,20 @@ class CubicBox():
         
         self.positions = positions.T
         n = tot_len(self.positions)
-        print0(f'Succesfully read data with ntracers={n} scattered across {mpicomm.size} ranks.')  
+        print0(f'Succesfully read data with ntracers={n} scattered across {mpicomm.size} ranks.')
+        
+        if self.ngal:
+            self.downsample(self.ngal)
+        
     
+    def downsample(self, ngal, seed=42):
+        print0(f'Downsampling catalog to match ngal={ngal}')
+        np.random.seed(seed)
+        ngal_old = self.positions.shape[0] / (self.boxsize[0] * self.boxsize[1] * self.boxsize[2])
+        idx = np.random.random(self.positions.shape[0]) <= ngal / ngal_old
+        self.positions = self.positions[idx]
+        
+        
     def get_dict(self):
         return {'positions': self.positions}
     
@@ -368,7 +389,7 @@ class CubicBox():
             
         for seed in seeds:
             np.random.seed(seed)
-            x, y, z = np.random.uniform(low=0.0, high=self.boxsize_true, size=size)
+            x, y, z = np.random.uniform(low=0.0, high=self.boxsize_true, size=size).T
             x = x.astype('f4') / self.q_perp
             y = y.astype('f4') / self.q_perp
             z = z.astype('f4') / self.q_par  
@@ -488,7 +509,7 @@ class CubicBox():
     
 class CutSky():
     """
-    A class used to read cubic mock catalogs saved under different conventions.
+    A class used to read CutSky mock catalogs saved under different conventions.
     
     Pre-recontruction catalogs follow the orignal paths, while post-reconstruction
     catalogs follow the conventions used for this task.
@@ -506,6 +527,7 @@ class CutSky():
                  path=None,
                  load=True,
                  postype='cartesian',
+                 fiber_assignment=True,
                 ):
         
         """
@@ -535,6 +557,8 @@ class CutSky():
             Specify if the data should be loaded.
         postype : str
             If load is True, specify if positions should be in "cartesian" or "sky" coordinates.
+        fiber_assignment : boolean
+            If whichmocks='firstgen_y1', either to use the mocks with or without fiber_assignment.
         """
 
         self.tracer = tracer.upper()
@@ -549,7 +573,7 @@ class CutSky():
         self.zbin = self.zbins[nzbin]
         self.zbin['zmid'] = 0.5 * (self.zbin['zmin'] + self.zbin['zmax'])
         self.rec_settings = rec_settings if rec_settings else {'rec_algorithm': 'multigrid',
-                                                               'cellsize': 2000./512}
+                                                               'cellsize': 7.8}
         self.cap = cap.upper() if cap else None
         self.path = path
         
@@ -601,9 +625,16 @@ class CutSky():
                     self.filename = file
                     self.pre_mask = False
             elif self.style == 'ashley':
+                assert self.ncosmo_true == '000', 'Only ncosmo_true=000 is supported for Y1 mocks'
                 base_dir = f'/global/cfs/cdirs/desi/survey/catalogs/main/mocks/FirstGenMocks/AbacusSummit/Y1/mock{int(self.ph)}/LSScats/'
-                file = [base_dir + f'{self.tracer}_{d}_clustering.dat.fits' for d in ['S', 'N']]
-                self.filename = file
+                
+                if fiber_assignment:
+                    files = [base_dir + f'{self.tracer}_{d}_clustering.dat.fits' for d in ['S', 'N']]
+                else:
+                    files = [base_dir + f'{self.tracer}_complete_{d}_clustering.dat.fits' for d in ['S', 'N']]
+                
+                self.filename = files
+                self.fiber_assignment = fiber_assignment
             else:
                 raise NotImplementedError
         
@@ -613,11 +644,14 @@ class CutSky():
                 path = f'{scratch}/KP4/fiducial_cosmo/'
             self.path = path
                 
-            if self.style=='firstgen':
+            if self.whichmocks == 'firstgen':
                 self.pre_mask = True
                 wherefrom = f'AbacusSummit_base_c{self.ncosmo_true}_FirstGen_ph{self.ph}/'
-            else:
+            elif self.whichmocks == 'sv3':
                 wherefrom = f'AbacusSummit_base_c{self.ncosmo_true}_SV3_ph{self.ph}/'
+            elif self.whichmocks == 'firstgen_y1':
+                wherefrom = f'AbacusSummit_base_c{self.ncosmo_true}_FirstGen_Y1_ph{self.ph}/'
+                self.fiber_assignment = fiber_assignment
             
             base_dir = path + f'CutSky/{self.tracer}/' + wherefrom
  
@@ -678,50 +712,71 @@ class CutSky():
                         
                 else:
                     data = read(self.filename, ext=1, columns=['RA', 'DEC', 'Z', 'NZ'], mocktype='cutsky')
-                    self.nz = data['NZ']           
-                                
-                dist = cosmo_grid.comoving_radial_distance(data['Z'])
-
-                if postype == 'cartesian':
-                    positions =  utils.sky_to_cartesian(dist, data['RA'], data['DEC'])
-                    self.positions = positions
-                elif postype == 'sky':
-                    positions = np.array([dist, data['RA'], data['DEC']])
-                    self.positions = positions.T
-                elif postype == 'sky_with_z':
-                    positions = np.array([data['Z'], data['RA'], data['DEC']])
-                    self.positions = positions.T
+                    self.nz = data['NZ']
+                    
+                self.weights = np.ones(len(data))
+                self.w_fkp = w_fkp(self.nz, self.P0)
             
             elif self.style == 'ashley':
-                return NotImplementedError
-        else:
-            columns = ['RA', 'DEC', 'Z', 'NZ']
-            data = read(self.filename, ext=1, columns=columns, mocktype='cutsky')
-            
-            dist = cosmo_grid.comoving_radial_distance(data['Z'])
-
-            if postype == 'cartesian':
-                positions =  utils.sky_to_cartesian(dist, data['RA'], data['DEC'])
-                self.positions = positions
-            elif postype == 'sky':
-                positions = np.array([dist, data['RA'], data['DEC']])
-                self.positions = positions.T
-            elif postype == 'sky_with_z':
-                    positions = np.array([data['Z'], data['RA'], data['DEC']])
-                    self.positions = positions.T
+                columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'NZ', 'WEIGHT_FKP']
+                data = []
+                for file in self.filename:
+                    data.append(read(file, ext=1, columns=columns, mocktype='cutsky'))
+                data = np.concatenate(data)
+                mask_z = (data['Z']>=self.zbin['zmin']) & (data['Z']<self.zbin['zmax'])
+                data = data[mask_z]
                                 
-            self.nz = data['NZ']
+                if self.cap == 'NGC':
+                    mask_cap = (data['RA'] > 88) & (data['RA'] < 303)
+                    data = data[mask_cap]
+                elif self.cap == 'SGC':
+                    mask_cap = (data['RA'] < 88) | (data['RA'] > 303)
+                    data = data[mask_cap]
+                       
+                self.nz = data['NZ']
+                self.weights = data['WEIGHT']
+                self.w_fkp = data['WEIGHT_FKP']
+            
+        else:
+            if self.style == 'firstgen':
+                columns = ['RA', 'DEC', 'Z', 'NZ']
+                data = read(self.filename, ext=1, columns=columns, mocktype='cutsky')
+                self.nz = data['NZ']
+                self.weights = np.ones(len(data))
+                self.w_fkp = w_fkp(self.nz, self.P0)
+                
+            elif self.style == 'ashley':
+                columns = ['RA', 'DEC', 'Z', 'NZ', 'WEIGHT', 'WEIGHT_FKP']       
+                data = read(self.filename, ext=1, columns=columns, mocktype='cutsky')
+                self.nz = data['NZ']
+                self.weights = data['WEIGHT']
+                self.w_fkp = data['WEIGHT_FKP']
+            
+
+        dist = cosmo_grid.comoving_radial_distance(data['Z'])
+
+        if postype == 'cartesian':
+            positions =  utils.sky_to_cartesian(dist, data['RA'], data['DEC'])
+            self.positions = positions
+        elif postype == 'sky':
+            positions = np.array([dist, data['RA'], data['DEC']])
+            self.positions = positions.T
+        elif postype == 'sky_with_z':
+            positions = np.array([data['Z'], data['RA'], data['DEC']])
+            self.positions = positions.T
         
         n = tot_len(self.positions)
         print0(f'Succesfully read data with ntracers={n} scattered across {mpicomm.size} ranks.')
         
     def get_dict(self):
-        return {'positions': self.positions, 'nz': self.nz}
+        return {'positions': self.positions, 'nz': self.nz, 'weights': self.weights, 'w_fkp': self.w_fkp}
                 
     def read_randoms(self, seeds=None, shifted=False, postype='cartesian'):
         cosmo_grid = fiducial.AbacusSummit(name=self.ncosmo_grid, engine='class')
         randoms_list = []
         nz_list = []
+        weight_list = []
+        w_fkp_list = []
         if not seeds:
             seeds = list(range(100, 2100, 100))
         elif type(seeds) == int:
@@ -776,6 +831,8 @@ class CutSky():
                         print0(f'Succesfully read randoms(seed={seed}) with ntracers={n} scattered across {mpicomm.size} ranks.')
                         randoms_list.append(positions)
                         nz_list.append(nz)
+                        weight_list.append(np.ones(n))
+                        w_fkp_list.append(w_fkp(nz, self.P0))
                         
                 else:
                     base_dir = ( f'{os.environ.get("SCRATCH")}/KP4/fiducial_cosmo/CutSky/{self.tracer}/'
@@ -804,49 +861,114 @@ class CutSky():
                         print0(f'Succesfully read randoms(seed={seed}) with ntracers={n} scattered across {mpicomm.size} ranks.')
                         randoms_list.append(positions)
                         nz_list.append(nz)
-        
-        else:
-            columns = ['RA', 'DEC', 'Z', 'NZ']
-            for seed in seeds:
-                file = self.get_randoms_ofilename(seed, self.rectype)
-                randoms = read(file, ext=1, columns=columns, mocktype='cutsky')
+                        weight_list.append(np.ones(n))
+                        w_fkp_list.append(w_fkp(nz, self.P0))
+            
+            elif self.style == 'ashley':
+                columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'NZ', 'WEIGHT_FKP']
+                base_dir = f'/global/cfs/cdirs/desi/survey/catalogs/main/mocks/FirstGenMocks/AbacusSummit/Y1/mock{int(self.ph)}/LSScats/'
                 
+                if self.fiber_assignment:
+                    files = [base_dir + f'{self.tracer}_{d}_0_clustering.ran.fits' for d in ['S', 'N']]
+                else:
+                    files = [base_dir + f'{self.tracer}_complete_{d}_0_clustering.ran.fits' for d in ['S', 'N']]
+                randoms = []
+                for file in files:
+                    randoms.append(read(file, ext=1, columns=columns, mocktype='cutsky'))
+                randoms = np.concatenate(randoms)
+                
+                mask_z = (randoms['Z']>=self.zbin['zmin']) & (randoms['Z']<self.zbin['zmax'])
+                randoms = randoms[mask_z]
+
+                if self.cap == 'NGC':
+                    mask_cap = (randoms['RA'] > 88) & (randoms['RA'] < 303)
+                    randoms = randoms[mask_cap]
+                elif self.cap == 'SGC':
+                    mask_cap = (randoms['RA'] < 88) | (randoms['RA'] > 303)
+                    randoms = randoms[mask_cap]
+
                 dist = cosmo_grid.comoving_radial_distance(randoms['Z'])
+                
                 if postype == 'cartesian':
                     positions =  utils.sky_to_cartesian(dist, randoms['RA'], randoms['DEC'])
                 elif postype == 'sky':
                     positions = np.array([dist, randoms['RA'], randoms['DEC']]).T
                 elif postype == 'sky_with_z':
                     positions = np.array([randoms['Z'], randoms['RA'], randoms['DEC']]).T
-                
+
                 n = tot_len(positions)
-                print0(f'Succesfully read randoms(seed={seed}) with ntracers={n} scattered across {mpicomm.size} ranks.')
-                randoms_list.append(positions)
-                nz_list.append(randoms['NZ'])
+                print0(f'Succesfully read randoms with ntracers={n} scattered across {mpicomm.size} ranks.')
+                randoms_list = [positions]
+                nz_list = [randoms['NZ']]
+                weight_list = [randoms['WEIGHT']]
+                w_fkp_list = [randoms['WEIGHT_FKP']]
+                
+                
+        else:
+            if self.style == 'firstgen':
+                columns = ['RA', 'DEC', 'Z', 'NZ']
+                for seed in seeds:
+                    file = self.get_randoms_ofilename(seed, self.rectype)
+                    randoms = read(file, ext=1, columns=columns, mocktype='cutsky')
 
-        return randoms_list, nz_list
+                    dist = cosmo_grid.comoving_radial_distance(randoms['Z'])
+                    if postype == 'cartesian':
+                        positions =  utils.sky_to_cartesian(dist, randoms['RA'], randoms['DEC'])
+                    elif postype == 'sky':
+                        positions = np.array([dist, randoms['RA'], randoms['DEC']]).T
+                    elif postype == 'sky_with_z':
+                        positions = np.array([randoms['Z'], randoms['RA'], randoms['DEC']]).T
 
+                    n = tot_len(positions)
+                    print0(f'Succesfully read randoms(seed={seed}) with ntracers={n} scattered across {mpicomm.size} ranks.')
+                    randoms_list.append(positions)
+                    nz_list.append(randoms['NZ'])
+                    weight_list.append(np.ones(n))
+                    w_fkp_list.append(w_fkp(randoms['NZ'], self.P0))
+                    
+            elif self.style == 'ashley':
+                columns = ['RA', 'DEC', 'Z', 'NZ', 'WEIGHT', 'WEIGHT_FKP']
+                file = self.get_randoms_ofilename(None, self.rectype)
+                randoms = read(file, ext=1, columns=columns, mocktype='cutsky')
+                dist = cosmo_grid.comoving_radial_distance(randoms['Z'])
+                
+                if postype == 'cartesian':
+                    positions =  utils.sky_to_cartesian(dist, randoms['RA'], randoms['DEC'])
+                elif postype == 'sky':
+                    positions = np.array([dist, randoms['RA'], randoms['DEC']]).T
+                elif postype == 'sky_with_z':
+                    positions = np.array([randoms['Z'], randoms['RA'], randoms['DEC']]).T
+
+                n = tot_len(positions)
+                print0(f'Succesfully read randoms with ntracers={n} scattered across {mpicomm.size} ranks.')
+                randoms_list = [positions]
+                nz_list = [randoms['NZ']]
+                weight_list = [randoms['WEIGHT']]
+                w_fkp_list = [randoms['WEIGHT_FKP']]
+            
+        return randoms_list, nz_list, weight_list, w_fkp_list
+        
  
     def get_randoms(self, seeds=None, shifted=False, postype='cartesian', concat=False):
-        if not shifted:
-            if self.style == 'firstgen':
-                randoms_list, nz_list = self.read_randoms(seeds=seeds, shifted=shifted, postype=postype)
-            else:
-                randoms_list, nz_list = self.generate_randoms(seeds=seeds)
-        else:
-            randoms_list, nz_list = self.read_randoms(seeds=seeds, shifted=shifted, postype=postype)
+
+        randoms_list, nz_list, weight_list, w_fkp_list = self.read_randoms(seeds=seeds, shifted=shifted, postype=postype)
         
 
         if len(randoms_list) == 1:
-            return {'positions': randoms_list[0], 'nz': nz_list[0]}
+            return {'positions': randoms_list[0], 'nz': nz_list[0],
+                    'weights': weight_list[0], 'w_fkp': w_fkp_list[0]}
 
         elif concat:
             randoms = np.concatenate(randoms_list)
             nz = np.concatenate(nz_list)
-            return {'positions': randoms, 'nz': nz}
+            weight = np.concantenate(weight_list)
+            w_fkp = np.concantenate(w_fkp_list)
+            return {'positions': randoms, 'nz': nz,
+                    'weights': weight, 'w_fkp': w_fkp}
 
         else:
-            return [{'positions': randoms, 'nz': nz} for randoms, nz in zip(randoms_list, nz_list)]
+            return [{'positions': randoms, 'nz': nz,
+                     'weights': weight, 'w_fkp': w_fkp} for randoms, nz, weight, w_fkp in zip(randoms_list, nz_list, weight_list, w_fkp_list)]
 
     
     def get_ofilename(self, kind, out_path=None, mkdir=True, parentdirs=True):
@@ -856,10 +978,12 @@ class CutSky():
                 scratch = os.environ.get('SCRATCH')
                 out_path = f'{scratch}/KP4/fiducial_cosmo/'
             
-            if self.whichmocks=='firstgen':
+            if self.whichmocks == 'firstgen':
                 whereto = f'AbacusSummit_base_c{self.ncosmo_true}_FirstGen_ph{self.ph}/'
-            elif self.whichmocks=='sv3':
+            elif self.whichmocks == 'sv3':
                 whereto = f'AbacusSummit_base_c{self.ncosmo_true}_SV3_ph{self.ph}/'
+            elif self.whichmocks == 'firstgen_y1':
+                whereto = f'AbacusSummit_base_c{self.ncosmo_true}_FirstGen_Y1_ph{self.ph}/'
 
             output_dir = out_path
             if parentdirs:
@@ -879,10 +1003,12 @@ class CutSky():
             
         else:
             
-            if self.whichmocks=='firstgen':
+            if self.whichmocks == 'firstgen':
                 whereto = f'AbacusSummit_base_c{self.ncosmo_true}_FirstGen/'
-            elif self.whichmocks=='sv3':
+            elif self.whichmocks == 'sv3':
                 whereto = f'AbacusSummit_base_c{self.ncosmo_true}_SV3/'
+            elif self.whichmocks == 'firstgen_y1':
+                whereto = f'AbacusSummit_base_c{self.ncosmo_true}_FirstGen_Y1/'
                 
             if not out_path:
                 user = os.environ.get('USER')
@@ -900,15 +1026,14 @@ class CutSky():
 
             if not self.rectype:
                 file_name = f'{label}_cutsky_{self.tracer}_zmin{self.zbin["zmin"]:.1f}_zmax{self.zbin["zmax"]:.1f}_Grid{self.ncosmo_grid}_ph{self.ph}.npy'
+                if self.cap:
+                    name_dec = file_name.split('_')
+                    name_dec.insert(3, self.cap)
+                    file_name = '_'.join(name_dec)
             else:
                 filename = os.path.basename(self.filename)
                 file_name = (f'{label}_' + '_'.join(filename.replace('displaced_', '').split('_')[:-1]) +
                                       f'_{self.rectype}_Grid{self.ncosmo_grid}_ph{self.ph}.npy')
-           
-            if self.cap:
-                name_dec = file_name.split('_')
-                name_dec.insert(3, self.cap)
-                file_name = '_'.join(name_dec)
                 
             ofile = output_dir + file_name
 
@@ -923,13 +1048,16 @@ class CutSky():
             
         return ofile
     
-    def get_randoms_ofilename(self, seed, convention, kind='recon', out_path=None):
+    def get_randoms_ofilename(self, seed=None, convention='recsym', kind='recon', out_path=None):
         base_file_name = self.get_ofilename(kind, out_path, mkdir=False)
         dirname = os.path.dirname(base_file_name)
         file_name = os.path.basename(base_file_name)
         dirname += '/randoms/'
         file_name = file_name.replace('displaced', 'shifted')
-        file_name = file_name.replace(f'Grid{self.ncosmo_grid}', f'{convention}_Grid{self.ncosmo_grid}_S{seed}')
+        if self.whichmocks == 'firstgen':
+            file_name = file_name.replace(f'Grid{self.ncosmo_grid}', f'{convention}_Grid{self.ncosmo_grid}_S{seed}')
+        elif self.whichmocks == 'firstgen_y1':
+            file_name = file_name.replace(f'Grid{self.ncosmo_grid}', f'{convention}_Grid{self.ncosmo_grid}')
         ofile = dirname + file_name
         
         return ofile
